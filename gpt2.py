@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as np
-
+from jax import random
 from tqdm import tqdm
 from utils import load_encoder_hparams_and_params
 
@@ -127,7 +127,7 @@ def main(
 ):
     print(f"Prompt: {prompt}")
     prompt: str = "Alan Turing is a"
-    n_tokens_to_generate: int = 10
+    n_tokens_to_generate: int = 100
     model_size: str = "124M"
     models_dir: str = "models"
 
@@ -151,22 +151,38 @@ def main(
     # make sure we are not surpassing the max sequence length of our model
     assert len(input_ids) + n_tokens_to_generate < hparams["n_ctx"]
 
+    key = random.PRNGKey(0) # seed
+
     # generate output ids
     #    output_ids = generate(input_ids, params, hparams["n_head"], n_tokens_to_generate)
+
     for _ in tqdm(
         range(n_tokens_to_generate), "generating"
     ):  # auto-regressive decode loop
-        logits = gpt2(
-            np.array(input_ids), **params, n_head=12
-        )  # model forward pass (n_sec, n_vocab)
-        next_id = np.argmax(logits[-1])  # greedy sampling, -1 for the last word
-        # jax.random.choice(jax.random.PRNGKey(0), np.arange(logits.shape[1]), p=logits[-1])
-        input_ids.append(int(next_id))  # append prediction to input
-        print(encoder.decode([input_ids[-1]]))
+        while True:
+            key, subkey = random.split(key)
 
-    output_ids = input_ids[
-        len(input_ids) - n_tokens_to_generate :
-    ]  # only return generated ids
+            logits = gpt2(
+                np.array(input_ids), **params, n_head=12
+            )  # model forward pass (n_sec, n_vocab)
+            next_id = np.argmax(logits[-1])  # greedy sampling, -1 for the last word
+            token_p = softmax(logits[-1])[next_id]
+            next_id = random.choice(subkey, np.arange(len(logits[-1])), p=softmax(logits[-1]))
+            print(token_p)
+            if token_p < 0.2 and len(input_ids) > 3:
+                print("Backtracking")
+                input_ids = input_ids[:-1]
+                #n_tokens_to_generate += 1
+                continue
+            # jax.random.choice(jax.random.PRNGKey(0), np.arange(logits.shape[1]), p=logits[-1])
+            input_ids.append(int(next_id))  # append prediction to input
+            print(encoder.decode([input_ids[-1]]))
+            break
+
+    #output_ids = input_ids[
+    #    len(input_ids) - n_tokens_to_generate :
+    #]  # only return generated ids
+    output_ids = input_ids
     print(f"output_ids: {output_ids}")
 
     # decode the ids back into a string
