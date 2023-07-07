@@ -9,8 +9,8 @@ def gelu(x):
     return 0.5 * x * (1 + np.tanh(np.sqrt(2 / np.pi) * (x + 0.044715 * x**3)))
 
 
-def softmax(x):
-    exp_x = np.exp(x - np.max(x, axis=-1, keepdims=True))
+def softmax(x, temp=1):
+    exp_x = np.exp((x - np.max(x, axis=-1, keepdims=True)) / temp)
     return exp_x / np.sum(exp_x, axis=-1, keepdims=True)
 
 
@@ -120,17 +120,20 @@ def gpt2(inputs, wte, wpe, blocks, ln_f, n_head):  # [n_seq] -> [n_seq, n_vocab]
 
 
 def main(
-    prompt: str = "Alan Turing is a",
+    prompt: str = ":",
     n_tokens_to_generate: int = 100,
     model_size: str = "124M",
     models_dir: str = "models",
 ):
-    print(f"Prompt: {prompt}")
-    prompt: str = "Alan Turing is a"
-    n_tokens_to_generate: int = 100
+
+    prompt: str = """This is a conversation between Penny and Leonard.
+    Penny: Hey leonard.
+    Leonard: Hey penny, I love you.
+    Penny:"""
+    n_tokens_to_generate: int = 500
     model_size: str = "124M"
     models_dir: str = "models"
-
+    print(f"Prompt: {prompt}")
     # load encoder, hparams, and params from the released open-ai gpt-2 files
     encoder, hparams, params = load_encoder_hparams_and_params(model_size, models_dir)
     hparams = {
@@ -146,7 +149,7 @@ def main(
     #           'wte': (50357, 7681)}
     # encode the input string using the BPE tokenizer
     input_ids = encoder.encode(prompt)
-
+    orig_len = len(input_ids)
     print(f"Input_ids: {input_ids}")
     # make sure we are not surpassing the max sequence length of our model
     assert len(input_ids) + n_tokens_to_generate < hparams["n_ctx"]
@@ -156,28 +159,46 @@ def main(
     # generate output ids
     #    output_ids = generate(input_ids, params, hparams["n_head"], n_tokens_to_generate)
 
-    for _ in tqdm(
-        range(n_tokens_to_generate), "generating"
-    ):  # auto-regressive decode loop
+#    for _ in tqdm(
+#        range(n_tokens_to_generate), "generating"
+#    ):  # auto-regressive decode loop
+    last_backtrack = 10000
+    for _  in range(n_tokens_to_generate):       
+        max_backtrack = 2
         while True:
             key, subkey = random.split(key)
 
             logits = gpt2(
                 np.array(input_ids), **params, n_head=12
             )  # model forward pass (n_sec, n_vocab)
-            next_id = np.argmax(logits[-1])  # greedy sampling, -1 for the last word
-            token_p = softmax(logits[-1])[next_id]
-            next_id = random.choice(subkey, np.arange(len(logits[-1])), p=softmax(logits[-1]))
-            print(token_p)
-            if token_p < 0.2 and len(input_ids) > 3:
-                print("Backtracking")
+              # greedy sampling, -1 for the last word
+            soft_logits = softmax(logits[-1], temp=0.8)
+            if np.sum(soft_logits > 0.1) < 2:
+                print("greedy")
+                next_id = np.argmax(logits[-1])
+                #next_id = random.choice(subkey, np.arange(len(logits[-1])), p=np.sqrt(soft_logits))
+            else:
+                print("random")
+                next_id = random.choice(subkey, np.arange(len(logits[-1])), p=soft_logits)
+
+            token_p = soft_logits[next_id]
+            if token_p < 0.5 and len(input_ids) >= orig_len and max_backtrack > 0 and last_backtrack > 2:
+                print(f"Backtracking |{encoder.decode([int(next_id)])}| with p={token_p}")
                 input_ids = input_ids[:-1]
+                max_backtrack -= 1
                 #n_tokens_to_generate += 1
+                last_backtrack = 0
                 continue
-            # jax.random.choice(jax.random.PRNGKey(0), np.arange(logits.shape[1]), p=logits[-1])
+
             input_ids.append(int(next_id))  # append prediction to input
-            print(encoder.decode([input_ids[-1]]))
+            
+            token_p = soft_logits[next_id]
+            last_backtrack += 1
+            print(f"Generating |{encoder.decode([int(next_id)])}| with p={token_p}")
             break
+        if input_ids[-2:] == [20131, 25]:
+            print(encoder.decode(input_ids))
+            input_ids += [220] + encoder.encode(input())
 
     #output_ids = input_ids[
     #    len(input_ids) - n_tokens_to_generate :

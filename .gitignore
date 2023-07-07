@@ -1,5 +1,6 @@
 /models/
 /jax/
+/openai/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
